@@ -1,55 +1,57 @@
 # GridfLender (Blender Addon)
-[![Blender 5.0+](https://img.shields.io/badge/Blender-5.0%2B-orange)](https://www.blender.org/)
+[![Blender 4.0+](https://img.shields.io/badge/Blender-4.0%2B-orange)](https://www.blender.org/)
 
-**A tool to generate strictly compliant Gridfinity bases for your custom 3D modeling projects.** 
+**A tool to generate strictly compliant Gridfinity bases for your custom 3D modeling projects.**
 
-This addon generates the solid "filled" base mesh (1x1, 1x2, 2x3 etc.) with correct profiles, magnet holes, and stacking lips. It is intended to be used as a starting point or a boolean cutter for modeling your own bins and holders.
+This addon generates the solid "filled" base mesh (1x1, 1x2, 2x3 etc.) with correct profiles, magnet holes, and stacking lips. It is intended to be used as a **starting point** or a **boolean cutter** for modeling your own bins and holders.
 
-## Features
+![Gridfinity Base Example](https://github.com/blekknajt/GridFlender/blob/main/docs/example.png?raw=true)
 
-- **Procedural Generation**: Create standard 42mm grid bases.
-- **Spec Compliant**: Dimensions and profiles match Gridfinity specifications.
-- **Magnet Holes**: Optional 6mm holes with correct spacing (7.75mm from corners) and depth.
-- **Stackable Socket**: Optional top "socket" for creating stackable bins.
-- **Height Presets**: Choose standard heights in "U" units (1U = 7mm).
+## Key Features
+
+- **Procedural Generation**: Create standard 42mm grid bases of any size.
+- **Spec Compliant**: Dimensions and profiles match Zach Freedman's Gridfinity specifications.
+- **Magnet Holes**: Optional standard 6mm holes with correct spacing (from corners) and depth.
+- **Stackable Socket**: Optional top "socket" lip for creating stackable bins.
+- **Height Presets**: Choose standard heights in "U" units (1U = 7mm) or customize.
 
 ## Installation
 
-1.  **Download the Addon:** [Download Gridfinity-Blender-Addon-v3.2.zip](../Gridfinity-Blender-Addon-v3.2.zip)
+1.  **Download:** [Latest Release](https://github.com/blekknajt/GridFlender/releases)
 2.  **Open Blender:** Go to `Edit > Preferences > Add-ons`.
-3.  **Install:** Click "Install..." and select the downloaded ZIP file.
-4.  **Enable:** Search for "Gridfinity" and check the box to enable the addon.
-5. Access via: **View3D → Sidebar (N) → Gridfinity**
+3.  **Install:** Click top-right "Install..." button (or "Install from Disk") and select the downloaded ZIP file.
+4.  **Enable:** Search for "Gridfinity" in the list and check the box to enable it.
+5.  **Access:** Find the panel in **View3D → Sidebar (N-panel) → Gridfinity**
 
-## Usage Guide
+## Workflow Guide
 
-1. **Set Grid Size**: Choose columns (X) and rows (Y).
-2. **Select Height**: Pick a standard unit height (e.g., 4U = 28mm).
-3. **Features**:
-   - Check **Include Magnet Holes** to add 6mm holes at the bottom corners.
-   - Check **Stackable** to cut the standard "socket" profile into the top.
-4. **Generate**: Click "Generate Base".
+This addon creates a solid geometry. Here is the recommended workflow:
 
-### Workflow Tip
-This object is solid. To make a useful bin:
-1. Generate the base (e.g., 1x1, 6U).
-2. Enter Edit Mode.
-3. Select top faces and inset/extrude downwards to create the compartment hollows.
-4. Or use boolean operations to cut specfic shapes for your tools.
+1.  **Configure Base**:
+    *   Set **Columns (X)** and **Rows (Y)**.
+    *   Select **Height** (e.g., 6U for a deep item, 3U for shallow).
+    *   Enable **Magnet Holes** if you plan to use magnets.
+    *   Enable **Stackable** if you want another bin to sit on top of this one.
+2.  **Generate**: Click "Generate Base".
+3.  **Model Your Holder**:
+    *   **Method A (Start from Base)**: Enter Edit Mode, select the top face, and extrude/inset downwards to carve out custom compartments.
+    *   **Method B (Boolean)**: Model your custom object separately, then position the generated base and use a Boolean Modifier (Difference) to cut the Gridfinity profile into the bottom of your object.
 
 ## Standard Dimensions
 
-| Unit | Value |
-|------|-------|
-| **Grid Unit** | 42mm x 42mm |
-| **Height Unit (1U)** | 7mm |
-| **Magnet Hole** | ⌀6mm x 2mm deep |
+| Feature | Value | Notes |
+| :--- | :--- | :--- |
+| **Grid Unit** | 42mm x 42mm | Standard module size |
+| **Height Unit (1U)** | 7mm | Multiples of this define bin height |
+| **Magnet Hole** | ⌀6.5mm x 2.4mm | Fits standard 6x2mm magnets with tolerance |
+| **Screw Hole** | ⌀3mm | Fits standard M3 screws |
 
 ## License
 
 MIT License
 
 ---
+
 Created with ❤️ by **@blekknajt** + **Antigravity**
 
 ☕ [Buy me a coffee](https://buycoffee.to/klafciarz)

@@ -2,7 +2,7 @@ bl_info = {
     "name": "GridfLender",
     "author": "blekknajt + Antigravity",
     "version": (3, 2),
-    "blender": (5, 0, 0),
+    "blender": (4, 0, 0),
     "location": "View3D > Sidebar > Gridfinity",
     "description": "Adds a Gridfinity base mesh with optional magnet holes",
     "category": "Add Mesh",
