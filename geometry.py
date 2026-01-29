@@ -63,31 +63,66 @@ def create_gridfinity_base_mesh(
 
 
 def _create_base_body(columns, rows, tile_height):
-    """Create solid base body."""
+    """Create solid base body with individual 1x1 feet.
+    
+    Strategy: Build everything in one bmesh to preserve individual foot geometry.
+    - Each foot goes from Z=0 to Z=5 with the Gridfinity profile
+    - A shared slab covers the top from Z=5 to tile_height
+    - Feet share edges at their boundaries but maintain separate bottom profiles
+    """
     bm = bmesh.new()
     
     width = columns * GRID_SIZE
     depth = rows * GRID_SIZE
     segments = 32
     
-    layers = []
+    # Calculate cell center offsets
+    start_x = -(width / 2) + (GRID_SIZE / 2)
+    start_y = -(depth / 2) + (GRID_SIZE / 2)
     
-    for inset, z in BOTTOM_PROFILE:
-        verts = _create_rect_layer(bm, width, depth, z, inset, segments)
-        layers.append(verts)
+    # 1. Create individual feet for each cell
+    for c in range(columns):
+        for r in range(rows):
+            cx = start_x + (c * GRID_SIZE)
+            cy = start_y + (r * GRID_SIZE)
+            
+            foot_layers = []
+            
+            # Create foot profile layers
+            for inset, z in BOTTOM_PROFILE:
+                layer_verts = _create_rect_layer(bm, GRID_SIZE, GRID_SIZE, z, inset, segments)
+                
+                # Translate to cell position
+                matrix = Matrix.Translation((cx, cy, 0))
+                bmesh.ops.transform(bm, matrix=matrix, verts=layer_verts)
+                
+                foot_layers.append(layer_verts)
+            
+            # Connect layers
+            for i in range(len(foot_layers) - 1):
+                _connect_layers(bm, foot_layers[i], foot_layers[i + 1])
+            
+            # Close only the bottom (top stays open to merge with slab)
+            if foot_layers:
+                _fill_face(bm, foot_layers[0], flip=False)
+                # Top face of foot will be created by the slab
     
-    if tile_height > 5.0:
-        verts = _create_rect_layer(bm, width, depth, tile_height, 0.0, segments)
-        layers.append(verts)
+    # 2. Create top slab from Z=5 to tile_height
+    slab_z_bottom = 5.0
+    if tile_height > slab_z_bottom:
+        # Create slab layers
+        slab_bottom = _create_rect_layer(bm, width, depth, slab_z_bottom, 0.0, segments)
+        slab_top = _create_rect_layer(bm, width, depth, tile_height, 0.0, segments)
         
-    for i in range(len(layers) - 1):
-        _connect_layers(bm, layers[i], layers[i + 1])
+        # Connect slab walls
+        _connect_layers(bm, slab_bottom, slab_top)
         
-    if layers:
-        _fill_face(bm, layers[0], flip=False)
-        _fill_face(bm, layers[-1], flip=True)
-        
+        # Close top (bottom of slab is open - feet tops are open too, they share Z=5)
+        _fill_face(bm, slab_top, flip=True)
+    
+    # Recalculate normals
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
+    
     mesh = bpy.data.meshes.new("GridfinityBase_Temp")
     bm.to_mesh(mesh)
     bm.free()
@@ -100,16 +135,43 @@ def _create_magnet_cutter(columns, rows, diameter, depth):
     width = columns * GRID_SIZE
     depth_y = rows * GRID_SIZE
     radius = diameter / 2
+    
+    # Per-cell calculation
+    start_x = -(width / 2) + (GRID_SIZE / 2)
+    start_y = -(depth_y / 2) + (GRID_SIZE / 2)
     offset = MAGNET_OFFSET_FROM_EDGE
     
-    corners = [
-        (-width/2 + offset, -depth_y/2 + offset),
-        (width/2 - offset, -depth_y/2 + offset),
-        (-width/2 + offset, depth_y/2 - offset),
-        (width/2 - offset, depth_y/2 - offset),
+    # Ideally magnets are per-cell corners. 
+    # Standard spec: 4 magnets per unit.
+    # We should iterate cells and place 4 magnets relative to cell center.
+    # Center of unit is (0,0). Corners are +/- 21.
+    # Magnet centers are at specific distance from outside?
+    # Spec: "Holes are 26mm apart" (centered). 42-26 = 16. 16/2 = 8mm from edge?
+    # Code had 7.75mm. 
+    # Let's stick to the previous iterative approach but PER CELL if we want true multi-cell support.
+    # Previous code: calculated 4 corners for the WHOLE shape. 
+    # WAIT. Gridfinity spec implies magnets on every unit?
+    # "Gridfinity base... magnets at corners of each 42mm squares".
+    # Yes, we need magnets for EACH cell.
+    
+    magnet_positions = []
+    
+    # Relative positions in a 42x42 cell
+    # 26mm spacing means +/- 13mm from center
+    cell_offsets = [
+        (-13, -13), (13, -13), 
+        (-13, 13), (13, 13)
     ]
     
-    for cx, cy in corners:
+    for c in range(columns):
+        for r in range(rows):
+            cx = start_x + (c * GRID_SIZE)
+            cy = start_y + (r * GRID_SIZE)
+            
+            for ox, oy in cell_offsets:
+                magnet_positions.append((cx + ox, cy + oy))
+    
+    for mx, my in magnet_positions:
         # Cut from slightly below 0 up to depth
         bmesh.ops.create_cone(
             bm,
@@ -119,7 +181,7 @@ def _create_magnet_cutter(columns, rows, diameter, depth):
             radius1=radius,
             radius2=radius,
             depth=depth + 0.5,
-            matrix=Matrix.Translation((cx, cy, (depth + 0.5)/2 - 0.25))
+            matrix=Matrix.Translation((mx, my, (depth + 0.5)/2 - 0.25))
         )
         
     mesh = bpy.data.meshes.new("MagnetCutter")
@@ -160,8 +222,8 @@ def _create_socket_cutter(columns, rows, tile_height):
     return mesh
 
 
-def _apply_boolean(base_mesh, cutter_mesh):
-    """Apply boolean difference."""
+def _apply_boolean(base_mesh, cutter_mesh, operation='DIFFERENCE'):
+    """Apply boolean operation."""
     base_obj = bpy.data.objects.new("Base_Temp", base_mesh)
     cutter_obj = bpy.data.objects.new("Cutter_Temp", cutter_mesh)
     
@@ -171,7 +233,7 @@ def _apply_boolean(base_mesh, cutter_mesh):
     cutter_obj.hide_set(True)
     
     mod = base_obj.modifiers.new("Boolean", 'BOOLEAN')
-    mod.operation = 'DIFFERENCE'
+    mod.operation = operation
     mod.object = cutter_obj
     mod.solver = 'EXACT'
     
@@ -189,16 +251,13 @@ def _apply_boolean(base_mesh, cutter_mesh):
     # Cleanup
     bpy.data.objects.remove(base_obj, do_unlink=True)
     bpy.data.objects.remove(cutter_obj, do_unlink=True)
-    # Note: base_mesh input is cleared because base_obj used it
-    # cutter_mesh input is explicitly removed
+    # The cutter mesh input is explicitly removed
     bpy.data.meshes.remove(cutter_mesh, do_unlink=True)
-    # base_obj.data (which is modified base_mesh) is NOT removed, but result is a copy?
-    # Actually modifier_apply modifies the mesh in-place on the object.
-    # So base_obj.data IS the result.
-    # The original passed 'base_mesh' is what base_obj uses.
-    # So we don't need to return a copy if we just return base_obj.data
-    # BUT we are removing base_obj. If we remove object, data remains if it has users?
-    # Let's ensure we return a safe mesh.
+    # If operation was Union, base_mesh is now "old", result is new.
+    # If logic assumes base_mesh is consumed, we might want to remove it if it's not the result
+    # In _create_base_body we pass slab_mesh as base_mesh.
+    # bpy.data.meshes.remove(base_mesh, do_unlink=True) # Let caller handle or Python GC?
+    # Better to be explicit if we created temp meshes.
     
     return result
 
