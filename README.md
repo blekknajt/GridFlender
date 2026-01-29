@@ -1,11 +1,9 @@
-# GridfLender (Blender Addon)
+# GridFlender (Blender Addon)
 [![Blender 4.0+](https://img.shields.io/badge/Blender-4.0%2B-orange)](https://www.blender.org/)
 
 **A tool to generate strictly compliant Gridfinity bases for your custom 3D modeling projects.**
 
 This addon generates the solid "filled" base mesh (1x1, 1x2, 2x3 etc.) with correct profiles, magnet holes, and stacking lips. It is intended to be used as a **starting point** or a **boolean cutter** for modeling your own bins and holders.
-
-![Gridfinity Base Example](https://github.com/blekknajt/GridFlender/blob/main/docs/example.png?raw=true)
 
 ## Key Features
 
@@ -44,7 +42,6 @@ This addon creates a solid geometry. Here is the recommended workflow:
 | **Grid Unit** | 42mm x 42mm | Standard module size |
 | **Height Unit (1U)** | 7mm | Multiples of this define bin height |
 | **Magnet Hole** | ⌀6.5mm x 2.4mm | Fits standard 6x2mm magnets with tolerance |
-| **Screw Hole** | ⌀3mm | Fits standard M3 screws |
 
 ## License
 
