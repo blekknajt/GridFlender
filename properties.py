@@ -39,14 +39,14 @@ def register():
 
     bpy.types.Scene.gridfinity_use_magnets = BoolProperty(
         name="Include Magnet Holes",
-        description="Add magnet holes at base corners",
+        description="Add magnet holes at base corners of each cell",
         default=False,
     )
 
     bpy.types.Scene.gridfinity_magnet_diameter = FloatProperty(
         name="Magnet Diameter",
-        description="Diameter of magnet holes (mm)",
-        default=6.0,
+        description="Diameter of magnet holes in mm (spec: 6.5mm for 6mm magnets)",
+        default=6.5,
         min=1.0,
         max=20.0,
         precision=1,
@@ -54,8 +54,8 @@ def register():
 
     bpy.types.Scene.gridfinity_magnet_depth = FloatProperty(
         name="Magnet Depth",
-        description="Depth of magnet holes (mm)",
-        default=2.0,
+        description="Depth of magnet holes in mm (spec: 2.4mm for 2mm magnets)",
+        default=2.4,
         min=0.5,
         max=10.0,
         precision=1,
@@ -67,7 +67,7 @@ def register():
         items=HEIGHT_OPTIONS,
         default='28',  # 4U = standard
     )
-    
+
     bpy.types.Scene.gridfinity_stackable = BoolProperty(
         name="Stackable (Top Lip)",
         description="Add stacking lip on top for bin-on-bin stacking",
