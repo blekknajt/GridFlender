@@ -1,0 +1,24 @@
+schema_version = "1.0.0"
+
+id = "gridflender"
+version = "4.1.0"
+name = "GridFlender"
+tagline = "Gridfinity bases with magnet holes and stacking socket"
+maintainer = "blekknajt"
+type = "add-on"
+website = "https://github.com/blekknajt/GridFlender"
+
+tags = ["Add Mesh", "Modeling"]
+
+blender_version_min = "4.2.0"
+
+license = ["SPDX:MIT"]
+
+[build]
+paths_exclude_pattern = [
+  "__pycache__/",
+  "/.git/",
+  "/.gitignore",
+  "/.gitattributes",
+  "*.zip",
+]

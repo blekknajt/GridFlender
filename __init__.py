@@ -1,10 +1,10 @@
 bl_info = {
-    "name": "GridfLender",
+    "name": "GridFlender",
     "author": "blekknajt + Antigravity",
-    "version": (3, 4),
+    "version": (4, 1, 0),
     "blender": (4, 0, 0),
-    "location": "View3D > Sidebar > Gridfinity",
-    "description": "Adds a Gridfinity base mesh with optional magnet holes",
+    "location": "View3D > Sidebar > GridFlender, View3D > Add > Mesh > Gridfinity Base",
+    "description": "Adds a Gridfinity base mesh with optional magnet holes and stacking socket",
     "category": "Add Mesh",
 }
 

@@ -1,13 +1,17 @@
 """
-Gridfinity base geometry - Version 4.0
-Units: MILLIMETERS
-Features: Magnet holes, Stackable socket
-Fixes:
-  - Manifold geometry: each foot is a closed solid, unioned with slab
-  - N-gon caps replaced with triangle fan fill
-  - Magnet hole defaults match spec (6.5mm dia x 2.4mm depth)
-  - Socket cutter no longer creates degenerate thin layer
-  - Robust boolean pipeline with full cleanup
+Gridfinity base geometry.
+Units: MILLIMETERS (1 Blender unit = 1 mm)
+
+Pipeline:
+  1. Slab (rounded-rect box) UNION all feet (one disjoint mesh)  -> 1 boolean
+  2. DIFFERENCE magnet holes + stacking socket (one disjoint mesh) -> 1 boolean
+
+Dimensions follow the Gridfinity spec (Zack Freedman):
+  - 42 mm grid, bins are 0.5 mm smaller (0.25 mm clearance per side)
+  - outer corner radius 3.75 mm (baseplate 4 mm minus clearance)
+  - foot profile: 0.8 mm 45deg chamfer, 1.8 mm vertical, 2.15 mm 45deg chamfer
+  - stacking socket uses the baseplate profile: 2.15 / 1.8 / 0.7 mm
+  - magnet holes 6.5 x 2.4 mm, 26 mm apart (8 mm from cell edges)
 """
 
 import bpy
@@ -16,43 +20,53 @@ import math
 from mathutils import Matrix
 
 
-GRID_SIZE = 42.0  # mm
+GRID_SIZE = 42.0       # mm, grid pitch
+HEIGHT_UNIT = 7.0      # mm, 1U
+BIN_CLEARANCE = 0.25   # mm per side between bin and grid
+BIN_CORNER_RADIUS = 3.75
+MIN_CORNER_RADIUS = 0.5
 
-# Bottom profile (inset_from_cell_edge, z_height)
-# Defines the stepped/chamfered base of each 42x42 cell
-BOTTOM_PROFILE = [
-    (2.55, 0.0),   # Bottom outer lip
-    (0.8,  1.8),   # First chamfer
-    (0.8,  2.15),  # Vertical wall
-    (0.0,  4.75),  # Second chamfer to full width
-    (0.0,  5.0),   # Top of foot = base of slab
+# Foot profile (inset_from_foot_top_edge, z), bottom to top.
+FOOT_PROFILE = [
+    (2.95, 0.0),   # bottom face
+    (2.15, 0.8),   # 0.8 mm 45deg chamfer
+    (2.15, 2.6),   # 1.8 mm vertical wall
+    (0.0,  4.75),  # 2.15 mm 45deg chamfer to full width
 ]
+FOOT_HEIGHT = FOOT_PROFILE[-1][1]
 
-# Socket profile (inset_from_outer_edge, depth_from_top)
-# Cut from the top of the bin to create a stacking socket
+# Stacking socket profile (inset_from_bin_edge, depth_from_top), top to bottom.
+# Mirrors the baseplate profile so a bin of the same footprint drops in.
 SOCKET_PROFILE = [
-    (0.0,  0.0),   # Top outer edge
-    (0.0,  0.25),  # Rim
-    (0.8,  2.35),  # Angled wall
-    (0.8,  3.2),   # Vertical wall
-    (2.55, 4.15),  # Chamfer
-    (2.55, 5.0),   # Bottom of socket
+    (0.0,  0.0),
+    (2.15, 2.15),  # 2.15 mm 45deg chamfer
+    (2.15, 3.95),  # 1.8 mm vertical wall
+    (2.85, 4.65),  # 0.7 mm 45deg chamfer
 ]
+SOCKET_DEPTH = SOCKET_PROFILE[-1][1]
 
-# Magnet placement: 26mm apart center-to-center within each cell
-# => +/- 13mm from cell center
+# Minimum solid material between the top of the feet and the socket floor.
+MIN_SOCKET_FLOOR = 1.0
+MIN_STACKABLE_HEIGHT = FOOT_HEIGHT + SOCKET_DEPTH + MIN_SOCKET_FLOOR
+
+# Magnet placement: 26 mm apart center-to-center => +/- 13 mm from cell center
 MAGNET_CELL_OFFSETS = [
     (-13.0, -13.0),
     ( 13.0, -13.0),
     (-13.0,  13.0),
     ( 13.0,  13.0),
 ]
+MAGNET_SEGMENTS = 32
 
-# Corner rounding on the outer edge of a full-size cell
-BASE_CORNER_RADIUS = 4.0
-
-# Segments per 90-degree arc (4 corners = 4x this many verts per layer)
+# Segments per 90-degree arc (4 corners = 4x this many verts per loop)
 ARC_SEGMENTS = 16
+
+# Overshoot for cutters so they never share a face with the body
+CUT_MARGIN = 0.1
+
+
+class GeometryError(Exception):
+    pass
 
 
 def create_gridfinity_base_mesh(
@@ -64,250 +78,132 @@ def create_gridfinity_base_mesh(
     tile_height: float = 28.0,
     stackable: bool = False,
 ) -> bpy.types.Mesh:
-    """Create Gridfinity base mesh using sequential boolean operations.
+    """Create a manifold Gridfinity base mesh (millimeters, centered on XY, Z=0 at the bottom)."""
+    if stackable and tile_height < MIN_STACKABLE_HEIGHT:
+        raise GeometryError(
+            f"Stackable socket needs a height of at least {MIN_STACKABLE_HEIGHT:.2f} mm"
+        )
 
-    The base is built as a single manifold solid, then magnet holes
-    and stacking socket are subtracted via boolean difference.
-    """
+    base_mesh = _apply_boolean(
+        _create_box_mesh(columns, rows, FOOT_HEIGHT, tile_height),
+        _create_feet_mesh(columns, rows),
+        'UNION',
+    )
 
-    # 1. Create solid base body (manifold, closed mesh)
-    base_mesh = _create_base_body(columns, rows, tile_height)
+    if use_magnets or stackable:
+        bm = bmesh.new()
+        if use_magnets:
+            _add_magnet_cutters(bm, columns, rows, magnet_diameter, magnet_depth)
+        if stackable:
+            _add_socket_cutter(bm, columns, rows, tile_height)
+        base_mesh = _apply_boolean(base_mesh, _bmesh_to_mesh(bm, "GF_Cutter_Temp"), 'DIFFERENCE')
 
-    # 2. Subtract magnet holes
-    if use_magnets:
-        cutter_mesh = _create_magnet_cutter(columns, rows, magnet_diameter, magnet_depth)
-        base_mesh = _apply_boolean(base_mesh, cutter_mesh, 'DIFFERENCE')
-
-    # 3. Subtract stackable socket
-    if stackable:
-        cutter_mesh = _create_socket_cutter(columns, rows, tile_height)
-        base_mesh = _apply_boolean(base_mesh, cutter_mesh, 'DIFFERENCE')
-
+    base_mesh.name = "GridfinityBase"
     return base_mesh
 
 
 # ---------------------------------------------------------------------------
-#  Base body
+#  Solids
 # ---------------------------------------------------------------------------
 
-def _create_base_body(columns, rows, tile_height):
-    """Create a manifold solid base.
-
-    Strategy:
-      - For each cell, create a closed profiled foot from Z=0 to Z=5.
-      - Create one outer slab (closed rounded-rect box) from Z=5 to tile_height.
-      - Union all feet with the slab so shared faces merge cleanly.
-
-    This guarantees a manifold result even for multi-cell grids.
-    """
-    width = columns * GRID_SIZE
-    depth = rows * GRID_SIZE
-
-    start_x = -(width / 2) + (GRID_SIZE / 2)
-    start_y = -(depth / 2) + (GRID_SIZE / 2)
-
-    foot_top_z = BOTTOM_PROFILE[-1][1]  # 5.0
-
-    # Build each foot as a separate closed solid
-    foot_meshes = []
+def _cell_centers(columns, rows):
+    start_x = -(columns - 1) * GRID_SIZE / 2.0
+    start_y = -(rows - 1) * GRID_SIZE / 2.0
     for c in range(columns):
         for r in range(rows):
-            cx = start_x + c * GRID_SIZE
-            cy = start_y + r * GRID_SIZE
-            foot_meshes.append(_create_single_foot(cx, cy, foot_top_z))
-
-    # Build the top slab as a closed box
-    slab_mesh = _create_box_mesh(width, depth, z_bottom=foot_top_z, z_top=tile_height)
-
-    # Combine: start with slab, union each foot
-    result = slab_mesh
-    for fm in foot_meshes:
-        result = _apply_boolean(result, fm, 'UNION')
-
-    return result
+            yield start_x + c * GRID_SIZE, start_y + r * GRID_SIZE
 
 
-def _create_single_foot(cx, cy, top_z):
-    """Create one closed 42x42 foot centered at (cx, cy), from Z=0 to top_z."""
+def _bin_size(cells):
+    return cells * GRID_SIZE - 2.0 * BIN_CLEARANCE
+
+
+def _create_feet_mesh(columns, rows):
+    """All feet as disjoint closed solids, from Z=0 to FOOT_HEIGHT."""
     bm = bmesh.new()
-
-    layers = []
-    for inset, z in BOTTOM_PROFILE:
-        layer_verts = _create_rounded_rect(bm, GRID_SIZE, GRID_SIZE, z, inset)
-        # Translate to cell position
-        mat = Matrix.Translation((cx, cy, 0))
-        bmesh.ops.transform(bm, matrix=mat, verts=layer_verts)
-        layers.append(layer_verts)
-
-    # Connect profile layers with quad strips
-    for i in range(len(layers) - 1):
-        _bridge_loops(bm, layers[i], layers[i + 1])
-
-    # Close bottom (Z=0) and top (Z=top_z) with triangle fans
-    _fill_cap(bm, layers[0], flip=True)
-    _fill_cap(bm, layers[-1], flip=False)
-
-    bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
-
-    mesh = bpy.data.meshes.new("Foot_Temp")
-    bm.to_mesh(mesh)
-    bm.free()
-    return mesh
+    foot_size = _bin_size(1)
+    for cx, cy in _cell_centers(columns, rows):
+        loops = [
+            _create_rounded_rect(bm, foot_size, foot_size, z, inset, center=(cx, cy))
+            for inset, z in FOOT_PROFILE
+        ]
+        _create_lofted_solid(bm, loops)
+    return _bmesh_to_mesh(bm, "GF_Feet_Temp")
 
 
-def _create_box_mesh(width, depth, z_bottom, z_top):
-    """Create a closed rounded-rect box from z_bottom to z_top."""
+def _create_box_mesh(columns, rows, z_bottom, z_top):
+    """Closed rounded-rect box covering the whole bin footprint."""
     bm = bmesh.new()
-
-    bottom = _create_rounded_rect(bm, width, depth, z_bottom, inset=0.0)
-    top = _create_rounded_rect(bm, width, depth, z_top, inset=0.0)
-
-    _bridge_loops(bm, bottom, top)
-    _fill_cap(bm, bottom, flip=True)
-    _fill_cap(bm, top, flip=False)
-
-    bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
-
-    mesh = bpy.data.meshes.new("Slab_Temp")
-    bm.to_mesh(mesh)
-    bm.free()
-    return mesh
+    w, d = _bin_size(columns), _bin_size(rows)
+    _create_lofted_solid(bm, [
+        _create_rounded_rect(bm, w, d, z_bottom, 0.0),
+        _create_rounded_rect(bm, w, d, z_top, 0.0),
+    ])
+    return _bmesh_to_mesh(bm, "GF_Slab_Temp")
 
 
-# ---------------------------------------------------------------------------
-#  Magnet cutter
-# ---------------------------------------------------------------------------
-
-def _create_magnet_cutter(columns, rows, diameter, hole_depth):
-    """Create a combined cutter mesh for all magnet holes.
-
-    Each cell gets 4 magnet holes at +/-13mm from cell center.
-    Holes extend from Z = -0.1 to Z = hole_depth (cutting through the bottom).
-    """
-    bm = bmesh.new()
-
-    width = columns * GRID_SIZE
-    depth_y = rows * GRID_SIZE
-    radius = diameter / 2.0
-
-    start_x = -(width / 2) + (GRID_SIZE / 2)
-    start_y = -(depth_y / 2) + (GRID_SIZE / 2)
-
-    # Total cylinder height with margin for clean boolean cut
-    cyl_height = hole_depth + 0.2
-    # Position so bottom of cylinder is at Z = -0.1
-    cyl_center_z = -0.1 + cyl_height / 2.0
-
-    for c in range(columns):
-        for r in range(rows):
-            cx = start_x + c * GRID_SIZE
-            cy = start_y + r * GRID_SIZE
-
-            for ox, oy in MAGNET_CELL_OFFSETS:
-                mx = cx + ox
-                my = cy + oy
-
-                bmesh.ops.create_cone(
-                    bm,
-                    cap_ends=True,
-                    cap_tris=True,
-                    segments=24,
-                    radius1=radius,
-                    radius2=radius,
-                    depth=cyl_height,
-                    matrix=Matrix.Translation((mx, my, cyl_center_z)),
-                )
-
-    mesh = bpy.data.meshes.new("MagnetCutter_Temp")
-    bm.to_mesh(mesh)
-    bm.free()
-    return mesh
+def _add_magnet_cutters(bm, columns, rows, diameter, hole_depth):
+    """Cylinders from Z=-CUT_MARGIN up to Z=hole_depth at each cell's magnet spots."""
+    height = hole_depth + CUT_MARGIN
+    center_z = -CUT_MARGIN + height / 2.0
+    for cx, cy in _cell_centers(columns, rows):
+        for ox, oy in MAGNET_CELL_OFFSETS:
+            bmesh.ops.create_cone(
+                bm,
+                cap_ends=True,
+                cap_tris=True,
+                segments=MAGNET_SEGMENTS,
+                radius1=diameter / 2.0,
+                radius2=diameter / 2.0,
+                depth=height,
+                matrix=Matrix.Translation((cx + ox, cy + oy, center_z)),
+            )
 
 
-# ---------------------------------------------------------------------------
-#  Socket cutter
-# ---------------------------------------------------------------------------
-
-def _create_socket_cutter(columns, rows, tile_height):
-    """Create cutter for the stackable socket at the top of the bin.
-
-    The cutter follows the socket profile and extends above the top face
-    to guarantee a clean boolean subtraction.
-    """
-    bm = bmesh.new()
-
-    width = columns * GRID_SIZE
-    depth = rows * GRID_SIZE
-
-    layers = []
-
-    # Build profile layers from top down
-    for inset, depth_from_top in SOCKET_PROFILE:
-        z = tile_height - depth_from_top
-        layer = _create_rounded_rect(bm, width, depth, z, inset)
-        layers.append(layer)
-
-    # Extension above the top for clean boolean cut (1mm above top surface)
-    top_extension = _create_rounded_rect(bm, width, depth, tile_height + 1.0, inset=0.0)
-
-    # Full layer list: extension on top, then profile layers (top-to-bottom)
-    all_layers = [top_extension] + layers
-
-    # Bridge consecutive layers
-    for i in range(len(all_layers) - 1):
-        _bridge_loops(bm, all_layers[i], all_layers[i + 1])
-
-    # Close top and bottom caps
-    _fill_cap(bm, all_layers[0], flip=False)
-    _fill_cap(bm, all_layers[-1], flip=True)
-
-    bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
-
-    mesh = bpy.data.meshes.new("SocketCutter_Temp")
-    bm.to_mesh(mesh)
-    bm.free()
-    return mesh
+def _add_socket_cutter(bm, columns, rows, tile_height):
+    """Socket following SOCKET_PROFILE, flared outward above the top face
+    so the cutter only touches the body along the outer top edge."""
+    w, d = _bin_size(columns), _bin_size(rows)
+    loops = [_create_rounded_rect(bm, w, d, tile_height + 1.0, -1.0)]
+    loops += [
+        _create_rounded_rect(bm, w, d, tile_height - depth, inset)
+        for inset, depth in SOCKET_PROFILE
+    ]
+    loops.reverse()  # bottom to top
+    _create_lofted_solid(bm, loops)
 
 
 # ---------------------------------------------------------------------------
 #  Boolean helper
 # ---------------------------------------------------------------------------
 
-def _apply_boolean(base_mesh, cutter_mesh, operation='DIFFERENCE'):
-    """Apply a boolean modifier and return the resulting mesh.
+def _apply_boolean(base_mesh, cutter_mesh, operation):
+    """Evaluate a boolean modifier and return the resulting new mesh.
 
-    Both input meshes are consumed (removed from bpy.data after operation).
+    Both input meshes are consumed. Uses the evaluated depsgraph instead of
+    bpy.ops, so it works regardless of the current mode or selection.
     """
-    base_obj = bpy.data.objects.new("Bool_Base", base_mesh)
-    cutter_obj = bpy.data.objects.new("Bool_Cutter", cutter_mesh)
-
-    col = bpy.context.collection
-    col.objects.link(base_obj)
-    col.objects.link(cutter_obj)
-    cutter_obj.hide_set(True)
-
-    mod = base_obj.modifiers.new("Boolean", 'BOOLEAN')
-    mod.operation = operation
-    mod.object = cutter_obj
-    mod.solver = 'EXACT'
-
-    bpy.context.view_layer.objects.active = base_obj
-    base_obj.select_set(True)
-
+    scene = bpy.context.scene
+    base_obj = bpy.data.objects.new("GF_Bool_Base", base_mesh)
+    cutter_obj = bpy.data.objects.new("GF_Bool_Cutter", cutter_mesh)
     try:
-        bpy.ops.object.modifier_apply(modifier="Boolean")
-    except Exception as e:
-        print(f"[GridFlender] Boolean ({operation}) failed: {e}")
+        scene.collection.objects.link(base_obj)
+        scene.collection.objects.link(cutter_obj)
 
-    # Copy result mesh before cleanup
-    result = base_obj.data.copy()
-    result.name = "GridfinityBase"
+        mod = base_obj.modifiers.new("Boolean", 'BOOLEAN')
+        mod.operation = operation
+        mod.object = cutter_obj
+        mod.solver = 'EXACT'
 
-    # Cleanup temporary objects and consumed meshes
-    bpy.data.objects.remove(base_obj, do_unlink=True)
-    bpy.data.objects.remove(cutter_obj, do_unlink=True)
-    bpy.data.meshes.remove(cutter_mesh, do_unlink=True)
-    bpy.data.meshes.remove(base_mesh, do_unlink=True)
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        result = bpy.data.meshes.new_from_object(
+            base_obj.evaluated_get(depsgraph), depsgraph=depsgraph
+        )
+    finally:
+        bpy.data.objects.remove(base_obj, do_unlink=True)
+        bpy.data.objects.remove(cutter_obj, do_unlink=True)
+        bpy.data.meshes.remove(base_mesh, do_unlink=True)
+        bpy.data.meshes.remove(cutter_mesh, do_unlink=True)
 
     return result
 
@@ -316,34 +212,49 @@ def _apply_boolean(base_mesh, cutter_mesh, operation='DIFFERENCE'):
 #  Geometry primitives
 # ---------------------------------------------------------------------------
 
-def _create_rounded_rect(bm, width, height, z, inset):
+def _bmesh_to_mesh(bm, name):
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
+    mesh = bpy.data.meshes.new(name)
+    bm.to_mesh(mesh)
+    bm.free()
+    return mesh
+
+
+def _create_lofted_solid(bm, loops):
+    """Bridge consecutive loops (bottom to top) and cap both ends."""
+    for lower, upper in zip(loops, loops[1:]):
+        _bridge_loops(bm, lower, upper)
+    _fill_cap(bm, loops[0])
+    _fill_cap(bm, loops[-1])
+
+
+def _create_rounded_rect(bm, width, height, z, inset, center=(0.0, 0.0)):
     """Create a rounded-rectangle vertex loop at the given Z height.
 
     Returns a list of BMVerts forming a closed loop (last connects to first).
-    Corner radius decreases with inset, clamped to valid range.
+    Corner radius follows the inset (keeps offset curves concentric),
+    clamped to a valid range.
     """
     w = max(width - 2.0 * inset, 0.01)
     h = max(height - 2.0 * inset, 0.01)
 
-    # Corner radius shrinks with inset, minimum 0.5mm
-    r = max(BASE_CORNER_RADIUS - inset, 0.5)
+    r = max(BIN_CORNER_RADIUS - inset, MIN_CORNER_RADIUS)
     r = min(r, w / 2.0, h / 2.0)
 
-    # Corner centers (inside the rounded rect)
+    ox, oy = center
     corners = [
         ( w / 2 - r,  h / 2 - r),   # top-right
         (-w / 2 + r,  h / 2 - r),   # top-left
         (-w / 2 + r, -h / 2 + r),   # bottom-left
         ( w / 2 - r, -h / 2 + r),   # bottom-right
     ]
-    start_angles = [0, math.pi / 2, math.pi, 3 * math.pi / 2]
 
     verts = []
     for idx, (cx, cy) in enumerate(corners):
-        for s in range(ARC_SEGMENTS):
-            angle = start_angles[idx] + (math.pi / 2) * s / ARC_SEGMENTS
-            x = cx + r * math.cos(angle)
-            y = cy + r * math.sin(angle)
+        for s in range(ARC_SEGMENTS + 1):
+            angle = (math.pi / 2) * (idx + s / ARC_SEGMENTS)
+            x = ox + cx + r * math.cos(angle)
+            y = oy + cy + r * math.sin(angle)
             verts.append(bm.verts.new((x, y, z)))
 
     return verts
@@ -352,39 +263,22 @@ def _create_rounded_rect(bm, width, height, z, inset):
 def _bridge_loops(bm, lower, upper):
     """Connect two equal-length vertex loops with quad faces."""
     n = len(lower)
-    if len(upper) != n:
-        print(f"[GridFlender] Bridge error: loop sizes differ ({n} vs {len(upper)})")
-        return
+    assert len(upper) == n, f"loop sizes differ ({n} vs {len(upper)})"
     for i in range(n):
         j = (i + 1) % n
-        try:
-            bm.faces.new([lower[i], lower[j], upper[j], upper[i]])
-        except ValueError:
-            pass
+        bm.faces.new([lower[i], lower[j], upper[j], upper[i]])
 
 
-def _fill_cap(bm, verts, flip=False):
-    """Fill a vertex loop with a triangle fan from the centroid.
+def _fill_cap(bm, verts):
+    """Fill a convex vertex loop with a triangle fan from its centroid.
 
-    This avoids creating a single n-gon with 64+ vertices, which causes
-    issues with booleans and rendering.
+    Avoids a single n-gon with 60+ vertices, which booleans handle poorly.
+    Winding is fixed later by recalc_face_normals.
     """
-    if len(verts) < 3:
-        return
-
-    # Compute centroid
-    cx = sum(v.co.x for v in verts) / len(verts)
-    cy = sum(v.co.y for v in verts) / len(verts)
-    cz = sum(v.co.z for v in verts) / len(verts)
-    center = bm.verts.new((cx, cy, cz))
-
     n = len(verts)
+    cx = sum(v.co.x for v in verts) / n
+    cy = sum(v.co.y for v in verts) / n
+    cz = sum(v.co.z for v in verts) / n
+    center = bm.verts.new((cx, cy, cz))
     for i in range(n):
-        j = (i + 1) % n
-        try:
-            if flip:
-                bm.faces.new([verts[j], verts[i], center])
-            else:
-                bm.faces.new([verts[i], verts[j], center])
-        except ValueError:
-            pass
+        bm.faces.new([verts[i], verts[(i + 1) % n], center])

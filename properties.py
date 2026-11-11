@@ -1,85 +1,94 @@
 """
-Properties for the Gridfinity Tile Generator addon.
+Properties for the GridFlender addon.
 """
 
 import bpy
-from bpy.props import BoolProperty, IntProperty, FloatProperty, EnumProperty
+from bpy.props import BoolProperty, IntProperty, FloatProperty, PointerProperty
+from bpy.types import PropertyGroup
+
+from .geometry import HEIGHT_UNIT
 
 
-# Gridfinity height unit = 7mm
-# Common heights: 1U, 2U, 3U, 4U, 5U, 6U
-HEIGHT_OPTIONS = [
-    ('7', '1U (7mm)', 'Quarter height'),
-    ('14', '2U (14mm)', 'Half height'),
-    ('21', '3U (21mm)', 'Three-quarter height'),
-    ('28', '4U (28mm)', 'Standard full height'),
-    ('35', '5U (35mm)', 'Tall'),
-    ('42', '6U (42mm)', 'Extra tall'),
-    ('49', '7U (49mm)', 'Very tall'),
-    ('56', '8U (56mm)', 'Maximum'),
-]
+class GridfinityBaseParams:
+    """Shared parameter definitions for the scene settings and the operator."""
 
-
-def register():
-    bpy.types.Scene.gridfinity_columns = IntProperty(
+    columns: IntProperty(
         name="Columns",
-        description="Number of columns (X)",
+        description="Number of grid cells along X",
         default=1,
         min=1,
         max=50,
+        soft_max=10,
     )
 
-    bpy.types.Scene.gridfinity_rows = IntProperty(
+    rows: IntProperty(
         name="Rows",
-        description="Number of rows (Y)",
+        description="Number of grid cells along Y",
         default=1,
         min=1,
         max=50,
+        soft_max=10,
     )
 
-    bpy.types.Scene.gridfinity_use_magnets = BoolProperty(
-        name="Include Magnet Holes",
-        description="Add magnet holes at base corners of each cell",
+    height_units: IntProperty(
+        name="Height (U)",
+        description=f"Total bin height in Gridfinity units (1U = {HEIGHT_UNIT:g} mm)",
+        default=4,
+        min=1,
+        max=30,
+        soft_max=12,
+    )
+
+    stackable: BoolProperty(
+        name="Stackable (Socket)",
+        description="Cut a stacking socket into the top so another bin can sit on this one (needs 2U or more)",
         default=False,
     )
 
-    bpy.types.Scene.gridfinity_magnet_diameter = FloatProperty(
-        name="Magnet Diameter",
-        description="Diameter of magnet holes in mm (spec: 6.5mm for 6mm magnets)",
-        default=6.5,
-        min=1.0,
-        max=20.0,
-        precision=1,
+    use_magnets: BoolProperty(
+        name="Magnet Holes",
+        description="Add 4 magnet holes in the bottom of each cell",
+        default=False,
     )
 
-    bpy.types.Scene.gridfinity_magnet_depth = FloatProperty(
-        name="Magnet Depth",
-        description="Depth of magnet holes in mm (spec: 2.4mm for 2mm magnets)",
+    magnet_diameter: FloatProperty(
+        name="Diameter",
+        description="Diameter of magnet holes in mm (spec: 6.5 mm for 6 mm magnets)",
+        default=6.5,
+        min=1.0,
+        max=12.0,
+        precision=2,
+        step=10,
+    )
+
+    magnet_depth: FloatProperty(
+        name="Depth",
+        description="Depth of magnet holes in mm (spec: 2.4 mm for 2 mm magnets)",
         default=2.4,
         min=0.5,
         max=10.0,
-        precision=1,
+        precision=2,
+        step=10,
     )
 
-    bpy.types.Scene.gridfinity_height_preset = EnumProperty(
-        name="Height",
-        description="Bin height in Gridfinity units (1U = 7mm)",
-        items=HEIGHT_OPTIONS,
-        default='28',  # 4U = standard
-    )
+    def param_dict(self):
+        return {name: getattr(self, name) for name in GridfinityBaseParams.__annotations__}
 
-    bpy.types.Scene.gridfinity_stackable = BoolProperty(
-        name="Stackable (Top Lip)",
-        description="Add stacking lip on top for bin-on-bin stacking",
-        default=False,
-    )
+
+class GridFlenderSettings(GridfinityBaseParams, PropertyGroup):
+    pass
+
+
+classes = (GridFlenderSettings,)
+
+
+def register():
+    for cls in classes:
+        bpy.utils.register_class(cls)
+    bpy.types.Scene.gridflender = PointerProperty(type=GridFlenderSettings)
 
 
 def unregister():
-    del bpy.types.Scene.gridfinity_columns
-    del bpy.types.Scene.gridfinity_rows
-    del bpy.types.Scene.gridfinity_use_magnets
-    del bpy.types.Scene.gridfinity_magnet_diameter
-    del bpy.types.Scene.gridfinity_magnet_depth
-    del bpy.types.Scene.gridfinity_height_preset
-    del bpy.types.Scene.gridfinity_stackable
+    del bpy.types.Scene.gridflender
+    for cls in reversed(classes):
+        bpy.utils.unregister_class(cls)
